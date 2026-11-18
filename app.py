@@ -12,13 +12,13 @@ st.title("📊 Փաստաթղթերի ընթերցում և Excel-ի լրացո�
 api_key = st.sidebar.text_input("Մուտքագրեք Gemini API Key-ը", type="password")
 
 excel_file = st.file_uploader("1. Վերբեռնեք ձեր Excel ֆորման (.xlsx)", type=["xlsx"])
-doc_file = st.file_uploader(
-    "2. Վերբեռնեք նկարը, PDF-ը կամ Excel ֆայլը", 
-    type=["png", "jpg", "jpeg", "pdf", "xlsx"]
+doc_files = st.file_uploader(
+    "2. Վերբեռնեք նկարներ, PDF-ներ կամ Excel ֆայլեր", 
+    type=["png", "jpg", "jpeg", "pdf", "xlsx"],
+    accept_multiple_files=True
 )
 header_row = st.number_input("Ո՞ր տողում են գտնվում սյունակների վերնագրերը", min_value=1, value=1)
 
-# Օգնող ֆունկցիա՝ մուտքային Excel ֆայլը տեքստի վերածելու համար
 def extract_text_from_excel(file_obj):
     source_wb = openpyxl.load_workbook(file_obj, data_only=True)
     text_lines = []
@@ -34,10 +34,10 @@ def extract_text_from_excel(file_obj):
 if st.button("Կարդալ և լրացնել Excel-ը"):
     if not api_key:
         st.error("Խնդրում ենք ձախ դաշտում մուտքագրել Gemini API Key-ը։")
-    elif not excel_file or not doc_file:
-        st.error("Խնդրում ենք վերբեռնել երկու ֆայլերն էլ։")
+    elif not excel_file or not doc_files:
+        st.error("Խնդրում ենք վերբեռնել ձեր ֆորման և առնվազն մեկ փաստաթուղթ։")
     else:
-        with st.spinner("AI-ը կարդում է փաստաթուղթը և լրացնում աղյուսակը..."):
+        with st.spinner(f"AI-ը կարդում է {len(doc_files)} փաստաթուղթ և լրացնում աղյուսակը..."):
             try:
                 wb = openpyxl.load_workbook(excel_file)
                 sheet = wb.active
@@ -49,27 +49,6 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
 
                 client = genai.Client(api_key=api_key)
 
-                prompt = f"""
-                Վերլուծիր այս փաստաթուղթը և հանիր տվյալները՝ ըստ հետևյալ սյունակների անունների՝ {headers}։
-                Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ։
-                Եթե որևէ սյունակի համար տվյալ չկա, դիր դատարկ տող ""։
-                """
-
-                # Ստուգում ենք՝ արդյոք 2-րդ ֆայլը Excel է, թե նկար/PDF
-                if doc_file.name.lower().endswith(".xlsx"):
-                    excel_text = extract_text_from_excel(doc_file)
-                    request_contents = [
-                        f"Ահա Excel փաստաթղթի պարունակությունը՝\n\n{excel_text}",
-                        prompt
-                    ]
-                else:
-                    file_bytes = doc_file.read()
-                    mime_type = doc_file.type
-                    request_contents = [
-                        types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                        prompt
-                    ]
-
                 available_models = []
                 for m in client.models.list():
                     name = m.name.replace("models/", "")
@@ -78,35 +57,60 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
 
                 available_models.sort(key=lambda x: ("flash" not in x, x), reverse=False)
 
-                response = None
-                last_error = None
+                prompt = f"""
+                Վերլուծիր այս փաստաթուղթը և հանիր տվյալները՝ ըստ հետևյալ սյունակների անունների՝ {headers}։
+                Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ։
+                Եթե որևէ սյունակի համար տվյալ չկա, դիր դատարկ տող ""։
+                """
 
-                for model_name in available_models:
-                    try:
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=request_contents,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json"
+                all_extracted_rows = []
+
+                # Հերթով մշակում ենք վերբեռնված բոլոր ֆայլերը
+                for current_file in doc_files:
+                    if current_file.name.lower().endswith(".xlsx"):
+                        excel_text = extract_text_from_excel(current_file)
+                        request_contents = [
+                            f"Ահա Excel փաստաթղթի պարունակությունը՝\n\n{excel_text}",
+                            prompt
+                        ]
+                    else:
+                        file_bytes = current_file.read()
+                        mime_type = current_file.type
+                        request_contents = [
+                            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                            prompt
+                        ]
+
+                    response = None
+                    last_error = None
+
+                    for model_name in available_models:
+                        try:
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=request_contents,
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json"
+                                )
                             )
-                        )
-                        st.info(f"Օգտագործվեց մոդել՝ {model_name}")
-                        break
-                    except Exception as e:
-                        last_error = e
-                        time.sleep(1)
-                        continue
+                            break
+                        except Exception as e:
+                            last_error = e
+                            time.sleep(1)
+                            continue
 
-                if response is None:
-                    raise Exception(f"Չհաջողվեց կապվել որևէ մոդելի հետ։ Վերջին սխալը՝ {last_error}")
+                    if response is None:
+                        raise Exception(f"Չհաջողվեց մշակել «{current_file.name}» ֆայլը։ Սխալ՝ {last_error}")
 
-                extracted_rows = json.loads(response.text)
-                
+                    extracted_rows = json.loads(response.text)
+                    all_extracted_rows.extend(extracted_rows)
+
+                # Գտնում ենք առաջին դատարկ տողը և գրում բոլոր տվյալները իրար տակ
                 start_row = header_row + 1
                 while sheet.cell(row=start_row, column=1).value is not None:
                     start_row += 1
 
-                for row_idx, row_data in enumerate(extracted_rows):
+                for row_idx, row_data in enumerate(all_extracted_rows):
                     current_row = start_row + row_idx
                     for col_idx, header_name in enumerate(headers, start=1):
                         if header_name in row_data:
@@ -116,7 +120,7 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                 wb.save(output)
                 output.seek(0)
 
-                st.success(f"Պատրաստ է։ Ավելացվեց {len(extracted_rows)} տող։")
+                st.success(f"Պատրաստ է։ Մշակվեց {len(doc_files)} ֆայլ, ավելացվեց {len(all_extracted_rows)} տող։")
                 st.download_button(
                     label="📥 Ներբեռնել լրացված Excel-ը",
                     data=output,
