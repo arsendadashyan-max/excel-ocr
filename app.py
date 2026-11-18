@@ -12,8 +12,24 @@ st.title("📊 Փաստաթղթերի ընթերցում և Excel-ի լրացո�
 api_key = st.sidebar.text_input("Մուտքագրեք Gemini API Key-ը", type="password")
 
 excel_file = st.file_uploader("1. Վերբեռնեք ձեր Excel ֆորման (.xlsx)", type=["xlsx"])
-doc_file = st.file_uploader("2. Վերբեռնեք նկարը կամ PDF-ը", type=["png", "jpg", "jpeg", "pdf"])
+doc_file = st.file_uploader(
+    "2. Վերբեռնեք նկարը, PDF-ը կամ Excel ֆայլը", 
+    type=["png", "jpg", "jpeg", "pdf", "xlsx"]
+)
 header_row = st.number_input("Ո՞ր տողում են գտնվում սյունակների վերնագրերը", min_value=1, value=1)
+
+# Օգնող ֆունկցիա՝ մուտքային Excel ֆայլը տեքստի վերածելու համար
+def extract_text_from_excel(file_obj):
+    source_wb = openpyxl.load_workbook(file_obj, data_only=True)
+    text_lines = []
+    for sheet_name in source_wb.sheetnames:
+        ws = source_wb[sheet_name]
+        text_lines.append(f"--- Էջ՝ {sheet_name} ---")
+        for row in ws.iter_rows(values_only=True):
+            row_vals = [str(cell).strip() if cell is not None else "" for cell in row]
+            if any(row_vals):
+                text_lines.append(" | ".join(row_vals))
+    return "\n".join(text_lines)
 
 if st.button("Կարդալ և լրացնել Excel-ը"):
     if not api_key:
@@ -32,8 +48,6 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                     headers.append(str(val).strip() if val else f"Column_{col}")
 
                 client = genai.Client(api_key=api_key)
-                file_bytes = doc_file.read()
-                mime_type = doc_file.type
 
                 prompt = f"""
                 Վերլուծիր այս փաստաթուղթը և հանիր տվյալները՝ ըստ հետևյալ սյունակների անունների՝ {headers}։
@@ -41,14 +55,27 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                 Եթե որևէ սյունակի համար տվյալ չկա, դիր դատարկ տող ""։
                 """
 
-                # Ավտոմատ գտնում ենք քո API բանալու համար հասանելի բոլոր Gemini մոդելները
+                # Ստուգում ենք՝ արդյոք 2-րդ ֆայլը Excel է, թե նկար/PDF
+                if doc_file.name.lower().endswith(".xlsx"):
+                    excel_text = extract_text_from_excel(doc_file)
+                    request_contents = [
+                        f"Ահա Excel փաստաթղթի պարունակությունը՝\n\n{excel_text}",
+                        prompt
+                    ]
+                else:
+                    file_bytes = doc_file.read()
+                    mime_type = doc_file.type
+                    request_contents = [
+                        types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                        prompt
+                    ]
+
                 available_models = []
                 for m in client.models.list():
                     name = m.name.replace("models/", "")
                     if "gemini" in name and "embedding" not in name and "imagen" not in name:
                         available_models.append(name)
 
-                # Առաջնահերթություն ենք տալիս flash մոդելներին (ավելի արագ են)
                 available_models.sort(key=lambda x: ("flash" not in x, x), reverse=False)
 
                 response = None
@@ -58,10 +85,7 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                     try:
                         response = client.models.generate_content(
                             model=model_name,
-                            contents=[
-                                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                                prompt
-                            ],
+                            contents=request_contents,
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json"
                             )
