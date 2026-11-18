@@ -41,12 +41,21 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                 Եթե որևէ սյունակի համար տվյալ չկա, դիր դատարկ տող ""։
                 """
 
-                # Մինչև 3 փորձ՝ սերվերի ծանրաբեռնվածության դեպքում
+                # Մոդելների ցանկ՝ եթե մեկը զբաղված է, ավտոմատ անցնում է հաջորդին
+                models_to_try = [
+                    "gemini-3.8-flash",
+                    "gemini-3.8-flash-lite",
+                    "gemini-3.8-pro",
+                    "gemini-3.0-flash"
+                ]
+
                 response = None
-                for attempt in range(3):
+                last_error = None
+
+                for model_name in models_to_try:
                     try:
                         response = client.models.generate_content(
-                            model="gemini-3.8-flash",
+                            model=model_name,
                             contents=[
                                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
                                 prompt
@@ -55,12 +64,16 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                                 response_mime_type="application/json"
                             )
                         )
-                        break
+                        break  # Եթե աշխատեց, դուրս ենք գալիս ցիկլից
                     except Exception as e:
-                        if "503" in str(e) and attempt < 2:
-                            time.sleep(3)
+                        last_error = e
+                        if "503" in str(e) or "404" in str(e):
+                            time.sleep(1)
                             continue
                         raise e
+
+                if response is None:
+                    raise last_error
 
                 extracted_rows = json.loads(response.text)
                 
