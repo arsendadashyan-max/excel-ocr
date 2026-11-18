@@ -41,18 +41,20 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                 Եթե որևէ սյունակի համար տվյալ չկա, դիր դատարկ տող ""։
                 """
 
-                # Մոդելների ցանկ՝ եթե մեկը զբաղված է, ավտոմատ անցնում է հաջորդին
-                models_to_try = [
-                    "gemini-3.8-flash",
-                    "gemini-3.8-flash-lite",
-                    "gemini-3.8-pro",
-                    "gemini-3.0-flash"
-                ]
+                # Ավտոմատ գտնում ենք քո API բանալու համար հասանելի բոլոր Gemini մոդելները
+                available_models = []
+                for m in client.models.list():
+                    name = m.name.replace("models/", "")
+                    if "gemini" in name and "embedding" not in name and "imagen" not in name:
+                        available_models.append(name)
+
+                # Առաջնահերթություն ենք տալիս flash մոդելներին (ավելի արագ են)
+                available_models.sort(key=lambda x: ("flash" not in x, x), reverse=False)
 
                 response = None
                 last_error = None
 
-                for model_name in models_to_try:
+                for model_name in available_models:
                     try:
                         response = client.models.generate_content(
                             model=model_name,
@@ -64,16 +66,15 @@ if st.button("Կարդալ և լրացնել Excel-ը"):
                                 response_mime_type="application/json"
                             )
                         )
-                        break  # Եթե աշխատեց, դուրս ենք գալիս ցիկլից
+                        st.info(f"Օգտագործվեց մոդել՝ {model_name}")
+                        break
                     except Exception as e:
                         last_error = e
-                        if "503" in str(e) or "404" in str(e):
-                            time.sleep(1)
-                            continue
-                        raise e
+                        time.sleep(1)
+                        continue
 
                 if response is None:
-                    raise last_error
+                    raise Exception(f"Չհաջողվեց կապվել որևէ մոդելի հետ։ Վերջին սխալը՝ {last_error}")
 
                 extracted_rows = json.loads(response.text)
                 
