@@ -7,7 +7,7 @@ import io
 import time
 
 st.set_page_config(page_title="Նկարից Excel լրացնող գործիք", page_icon="📊")
-st.title("📊 Փաստաթղթերի համատեղ վերլուծություն և Excel-ի լրացում")
+st.title("📊 Փաստաթղթերի խորը վերլուծություն և Excel-ի լրացում")
 
 api_key = st.sidebar.text_input("Մուտքագրեք Gemini API Key-ը", type="password")
 
@@ -18,6 +18,12 @@ doc_files = st.file_uploader(
     accept_multiple_files=True
 )
 header_row = st.number_input("Ո՞ր տողում են գտնվում սյունակների վերնագրերը", min_value=1, value=1)
+
+# Նոր դաշտ՝ հատուկ ցուցումների համար
+extra_instructions = st.text_area(
+    "Լրացուցիչ ցուցումներ AI-ին (ոչ պարտադիր)", 
+    placeholder="Օրինակ՝ Կազմակերպությունների անունները համեմատիր ըստ ՀՎՀՀ-ի, ՍՊԸ-ն և LLC-ն համարիր նույնը, կամ գումարները գրիր առանց ԱԱՀ-ի..."
+)
 
 def extract_text_from_excel(file_obj):
     source_wb = openpyxl.load_workbook(file_obj, data_only=True)
@@ -31,13 +37,13 @@ def extract_text_from_excel(file_obj):
                 text_lines.append(" | ".join(row_vals))
     return "\n".join(text_lines)
 
-if st.button("Համատեղ կարդալ և լրացնել Excel-ը"):
+if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
     if not api_key:
         st.error("Խնդրում ենք ձախ դաշտում մուտքագրել Gemini API Key-ը։")
     elif not excel_file or not doc_files:
         st.error("Խնդրում ենք վերբեռնել ձեր ֆորման և առնվազն մեկ փաստաթուղթ։")
     else:
-        with st.spinner(f"AI-ը համատեղ վերլուծում է բոլոր {len(doc_files)} ֆայլերը..."):
+        with st.spinner(f"AI-ը խորը վերլուծում է {len(doc_files)} փաստաթուղթ (կարող է տևել 15-30 վայրկյան)..."):
             try:
                 wb = openpyxl.load_workbook(excel_file)
                 sheet = wb.active
@@ -49,12 +55,9 @@ if st.button("Համատեղ կարդալ և լրացնել Excel-ը"):
 
                 client = genai.Client(api_key=api_key)
 
-                # Հավաքում ենք բոլոր ֆայլերը մեկ ընդհանուր փաթեթի մեջ
                 request_contents = []
-                
                 for idx, current_file in enumerate(doc_files, start=1):
                     request_contents.append(f"=== Փաստաթուղթ #{idx} (Ֆայլի անունը՝ {current_file.name}) ===")
-                    
                     if current_file.name.lower().endswith(".xlsx"):
                         excel_text = extract_text_from_excel(current_file)
                         request_contents.append(excel_text)
@@ -65,25 +68,28 @@ if st.button("Համատեղ կարդալ և լրացնել Excel-ը"):
                             types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
                         )
 
-                # Հրահանգում ենք AI-ին համադրել բոլոր ֆայլերի տվյալները իրար հետ
                 prompt = f"""
-                Վերևում տրված են {len(doc_files)} փաստաթղթեր։ Ուշադիր ուսումնասիրիր դրանք ԲՈԼՈՐԸ ՄԻԱՍԻՆ, համադրիր և կապիր դրանց մեջ եղած տվյալները իրար հետ։
-                Համատեղ վերլուծության արդյունքում հանիր անհրաժեշտ տվյալները՝ ըստ հետևյալ սյունակների անունների՝ {headers}։
-                
-                Կարևոր կանոններ.
-                1. Եթե տարբեր ֆայլերում նույն գործարքին, անձին կամ ապրանքին վերաբերող լրացուցիչ տվյալներ կան, միավորիր դրանք մեկ ամբողջական տողի մեջ։
-                2. Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ։
-                3. Եթե որևէ սյունակի համար տվյալ չկա ոչ մի ֆայլում, դիր դատարկ տող ""։
+                Դու բարձրակարգ հաշվապահական և տվյալների վերլուծության մասնագետ ես։ Քո խնդիրն է ԱՌԱՎԵԼԱԳՈՒՅՆ ՃՇԳՐՏՈՒԹՅԱՄԲ վերլուծել վերևում տրված բոլոր {len(doc_files)} փաստաթղթերը միասին և լրացնել հետևյալ սյունակները՝ {headers}։
+
+                ԱՆՈՒՆՆԵՐԻ ԵՎ ՏՎՅԱԼՆԵՐԻ ԻԴԵՆՏԻՖԻԿԱՑՄԱՆ ԽԻՍՏ ԿԱՆՈՆՆԵՐ.
+                1. **Անունների նույնականացում (Fuzzy Matching).** Տարբեր ֆայլերում նույն անձի կամ կազմակերպության անունը կարող է գրված լինել փոքր-ինչ տարբեր (օրինակ՝ հայերեն, ռուսերեն կամ լատինատառ տրանսլիտով, «ՍՊԸ»-ով կամ առանց դրա, բառերի տեղափոխությամբ, կամ փոքր տառասխալներով)։ Ուշադիր համեմատիր տառ առ տառ, ստուգիր նաև ՀՎՀՀ-ները, հեռախոսահամարները, հասցեները կամ կոդերը՝ համոզվելու համար, որ ճիշտ ես կապում նույն սուբյեկտին։
+                2. **Առանց հորինելու.** Երբեք մի հորինիր տվյալներ։ Եթե անունը կամ թիվը դժվարընթեռնելի է, ուշադիր ուսումնասիրիր համատեքստը և մյուս փաստաթղթերը՝ ճիշտ տարբերակը հաստատելու համար։
+                3. **Տվյալների միավորում.** Բոլոր ֆայլերից հավաքիր տվյալները և միավորիր մեկ ամբողջական տողի մեջ յուրաքանչյուր եզակի գրառման համար։
+                4. **Օգտատիրոջ հատուկ ցուցումներ.** {extra_instructions if extra_instructions else "Չկան"}
+
+                Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ՝ {headers}։ Եթե որևէ դաշտի տվյալ ընդհանրապես չկա, դիր դատարկ տող ""։
                 """
                 request_contents.append(prompt)
 
+                # Առաջնահերթություն ենք տալիս ամենախելացի PRO մոդելներին (ոչ թե lite-ին)
                 available_models = []
                 for m in client.models.list():
                     name = m.name.replace("models/", "")
-                    if "gemini" in name and "embedding" not in name and "imagen" not in name:
+                    if "gemini" in name and "embedding" not in name and "imagen" not in name and "lite" not in name:
                         available_models.append(name)
 
-                available_models.sort(key=lambda x: ("flash" not in x, x), reverse=False)
+                # Սորտավորում ենք այնպես, որ առաջինը լինեն 'pro' մոդելները
+                available_models.sort(key=lambda x: ("pro" not in x, x), reverse=False)
 
                 response = None
                 last_error = None
@@ -94,10 +100,11 @@ if st.button("Համատեղ կարդալ և լրացնել Excel-ը"):
                             model=model_name,
                             contents=request_contents,
                             config=types.GenerateContentConfig(
-                                response_mime_type="application/json"
+                                response_mime_type="application/json",
+                                temperature=0.0  # Առավելագույն ճշգրտություն, զրո իմպրովիզացիա
                             )
                         )
-                        st.info(f"Օգտագործվեց մոդել՝ {model_name}")
+                        st.info(f"Օգտագործվեց բարձր ճշգրտության մոդել՝ {model_name}")
                         break
                     except Exception as e:
                         last_error = e
@@ -123,7 +130,7 @@ if st.button("Համատեղ կարդալ և լրացնել Excel-ը"):
                 wb.save(output)
                 output.seek(0)
 
-                st.success(f"Պատրաստ է։ Բոլոր {len(doc_files)} ֆայլերը համատեղ վերլուծվեցին, ավելացվեց {len(extracted_rows)} տող։")
+                st.success(f"Պատրաստ է։ Ավելացվեց {len(extracted_rows)} ճշգրտված տող։")
                 st.download_button(
                     label="📥 Ներբեռնել լրացված Excel-ը",
                     data=output,
