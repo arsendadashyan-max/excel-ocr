@@ -19,7 +19,6 @@ doc_files = st.file_uploader(
 )
 header_row = st.number_input("Ո՞ր տողում են գտնվում սյունակների վերնագրերը", min_value=1, value=1)
 
-# Նոր դաշտ՝ հատուկ ցուցումների համար
 extra_instructions = st.text_area(
     "Լրացուցիչ ցուցումներ AI-ին (ոչ պարտադիր)", 
     placeholder="Օրինակ՝ Կազմակերպությունների անունները համեմատիր ըստ ՀՎՀՀ-ի, ՍՊԸ-ն և LLC-ն համարիր նույնը, կամ գումարները գրիր առանց ԱԱՀ-ի..."
@@ -37,13 +36,25 @@ def extract_text_from_excel(file_obj):
                 text_lines.append(" | ".join(row_vals))
     return "\n".join(text_lines)
 
+# Օգնող ֆունկցիա՝ շատ մեծ JSON-ը անվտանգ կարդալու համար
+def safe_parse_json(raw_text):
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        # Եթե տեքստը շատ երկար լինելու պատճառով վերջում կտրվել է, վերականգնում ենք մինչև վերջին ամբողջական օբյեկտը
+        last_brace = raw_text.rfind("}")
+        if last_brace != -1:
+            repaired = raw_text[:last_brace + 1] + "]"
+            return json.loads(repaired)
+        raise
+
 if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
     if not api_key:
         st.error("Խնդրում ենք ձախ դաշտում մուտքագրել Gemini API Key-ը։")
     elif not excel_file or not doc_files:
         st.error("Խնդրում ենք վերբեռնել ձեր ֆորման և առնվազն մեկ փաստաթուղթ։")
     else:
-        with st.spinner(f"AI-ը խորը վերլուծում է {len(doc_files)} փաստաթուղթ (կարող է տևել 15-30 վայրկյան)..."):
+        with st.spinner(f"AI-ը խորը վերլուծում է {len(doc_files)} փաստաթուղթ (մեծ ֆայլերի դեպքում կարող է տևել 30-60 վայրկյան)..."):
             try:
                 wb = openpyxl.load_workbook(excel_file)
                 sheet = wb.active
@@ -75,20 +86,19 @@ if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
                 1. **Անունների նույնականացում (Fuzzy Matching).** Տարբեր ֆայլերում նույն անձի կամ կազմակերպության անունը կարող է գրված լինել փոքր-ինչ տարբեր (օրինակ՝ հայերեն, ռուսերեն կամ լատինատառ տրանսլիտով, «ՍՊԸ»-ով կամ առանց դրա, բառերի տեղափոխությամբ, կամ փոքր տառասխալներով)։ Ուշադիր համեմատիր տառ առ տառ, ստուգիր նաև ՀՎՀՀ-ները, հեռախոսահամարները, հասցեները կամ կոդերը՝ համոզվելու համար, որ ճիշտ ես կապում նույն սուբյեկտին։
                 2. **Առանց հորինելու.** Երբեք մի հորինիր տվյալներ։ Եթե անունը կամ թիվը դժվարընթեռնելի է, ուշադիր ուսումնասիրիր համատեքստը և մյուս փաստաթղթերը՝ ճիշտ տարբերակը հաստատելու համար։
                 3. **Տվյալների միավորում.** Բոլոր ֆայլերից հավաքիր տվյալները և միավորիր մեկ ամբողջական տողի մեջ յուրաքանչյուր եզակի գրառման համար։
-                4. **Օգտատիրոջ հատուկ ցուցումներ.** {extra_instructions if extra_instructions else "Չկան"}
+                4. **Կոմպակտ JSON.** Վերադարձրու կոմպակտ JSON՝ առանց ավելորդ բացատների և տողադարձերի, որպեսզի բոլոր տվյալները տեղավորվեն։
+                5. **Օգտատիրոջ հատուկ ցուցումներ.** {extra_instructions if extra_instructions else "Չկան"}
 
                 Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ՝ {headers}։ Եթե որևէ դաշտի տվյալ ընդհանրապես չկա, դիր դատարկ տող ""։
                 """
                 request_contents.append(prompt)
 
-                # Առաջնահերթություն ենք տալիս ամենախելացի PRO մոդելներին (ոչ թե lite-ին)
                 available_models = []
                 for m in client.models.list():
                     name = m.name.replace("models/", "")
                     if "gemini" in name and "embedding" not in name and "imagen" not in name and "lite" not in name:
                         available_models.append(name)
 
-                # Սորտավորում ենք այնպես, որ առաջինը լինեն 'pro' մոդելները
                 available_models.sort(key=lambda x: ("pro" not in x, x), reverse=False)
 
                 response = None
@@ -101,7 +111,8 @@ if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
                             contents=request_contents,
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
-                                temperature=0.0  # Առավելագույն ճշգրտություն, զրո իմպրովիզացիա
+                                temperature=0.0,
+                                max_output_tokens=65536
                             )
                         )
                         st.info(f"Օգտագործվեց բարձր ճշգրտության մոդել՝ {model_name}")
@@ -114,7 +125,7 @@ if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
                 if response is None:
                     raise Exception(f"Չհաջողվեց կապվել որևէ մոդելի հետ։ Սխալ՝ {last_error}")
 
-                extracted_rows = json.loads(response.text)
+                extracted_rows = safe_parse_json(response.text)
                 
                 start_row = header_row + 1
                 while sheet.cell(row=start_row, column=1).value is not None:
