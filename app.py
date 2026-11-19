@@ -6,68 +6,55 @@ import json
 import io
 import time
 
-st.set_page_config(page_title="Խելացի Excel լրացնող գործիք", page_icon="📊")
-st.title("📊 Փաստաթղթերի վերլուծություն՝ նախկին փորձի հիման վրա")
+st.set_page_config(page_title="Նկարից Excel լրացնող գործիք", page_icon="📊")
+st.title("📊 Փաստաթղթերի խորը վերլուծություն և Excel-ի լրացում")
 
 api_key = st.sidebar.text_input("Մուտքագրեք Gemini API Key-ը", type="password")
 
-# 1. Դատարկ ֆորման
-excel_file = st.file_uploader("1. Վերբեռնեք ձեր դատարկ Excel ֆորման (.xlsx)", type=["xlsx"])
-
-# 2. Նախկին գործարքների օրինակներ (Ուսուցման համար)
-history_files = st.file_uploader(
-    "2. Վերբեռնեք նախկին ճիշտ լրացված Excel ֆայլեր (որպես օրինակ AI-ի համար)", 
-    type=["xlsx"],
-    accept_multiple_files=True
-)
-
-# 3. Նոր փաստաթղթեր
+excel_file = st.file_uploader("1. Վերբեռնեք ձեր Excel ֆորման (.xlsx)", type=["xlsx"])
 doc_files = st.file_uploader(
-    "3. Վերբեռնեք նոր փաստաթղթերը (նկարներ, PDF-ներ կամ Excel ֆայլեր)", 
+    "2. Վերբեռնեք նկարներ, PDF-ներ կամ Excel ֆայլեր (միաժամանակյա վերլուծության համար)", 
     type=["png", "jpg", "jpeg", "pdf", "xlsx"],
     accept_multiple_files=True
 )
-
 header_row = st.number_input("Ո՞ր տողում են գտնվում սյունակների վերնագրերը", min_value=1, value=1)
 
 extra_instructions = st.text_area(
     "Լրացուցիչ ցուցումներ AI-ին (ոչ պարտադիր)", 
-    placeholder="Օրինակ՝ Եթե կազմակերպությունը կա նախկին գործարքներում, վերցրու անունն ու կոդը ճիշտ այնպես, ինչպես այնտեղ է գրված..."
+    placeholder="Օրինակ՝ Կազմակերպությունների անունները համեմատիր ըստ ՀՎՀՀ-ի, ՍՊԸ-ն և LLC-ն համարիր նույնը, կամ գումարները գրիր առանց ԱԱՀ-ի..."
 )
 
-def extract_text_from_excel(file_obj, max_rows=150):
+def extract_text_from_excel(file_obj):
     source_wb = openpyxl.load_workbook(file_obj, data_only=True)
     text_lines = []
     for sheet_name in source_wb.sheetnames:
         ws = source_wb[sheet_name]
         text_lines.append(f"--- Էջ՝ {sheet_name} ---")
-        row_count = 0
         for row in ws.iter_rows(values_only=True):
             row_vals = [str(cell).strip() if cell is not None else "" for cell in row]
             if any(row_vals):
                 text_lines.append(" | ".join(row_vals))
-                row_count += 1
-                if row_count >= max_rows:
-                    break
     return "\n".join(text_lines)
 
+# Օգնող ֆունկցիա՝ շատ մեծ JSON-ը անվտանգ կարդալու համար
 def safe_parse_json(raw_text):
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError:
+        # Եթե տեքստը շատ երկար լինելու պատճառով վերջում կտրվել է, վերականգնում ենք մինչև վերջին ամբողջական օբյեկտը
         last_brace = raw_text.rfind("}")
         if last_brace != -1:
             repaired = raw_text[:last_brace + 1] + "]"
             return json.loads(repaired)
         raise
 
-if st.button("Ուսումնասիրել նախկին փորձը և լրացնել Excel-ը"):
+if st.button("Խորը անալիզ անել և լրացնել Excel-ը"):
     if not api_key:
         st.error("Խնդրում ենք ձախ դաշտում մուտքագրել Gemini API Key-ը։")
     elif not excel_file or not doc_files:
-        st.error("Խնդրում ենք վերբեռնել ձեր դատարկ ֆորման և նոր փաստաթղթերը։")
+        st.error("Խնդրում ենք վերբեռնել ձեր ֆորման և առնվազն մեկ փաստաթուղթ։")
     else:
-        with st.spinner("AI-ը ուսումնասիրում է նախկին գործարքները և վերլուծում նոր փաստաթղթերը..."):
+        with st.spinner(f"AI-ը խորը վերլուծում է {len(doc_files)} փաստաթուղթ (մեծ ֆայլերի դեպքում կարող է տևել 30-60 վայրկյան)..."):
             try:
                 wb = openpyxl.load_workbook(excel_file)
                 sheet = wb.active
@@ -78,21 +65,12 @@ if st.button("Ուսումնասիրել նախկին փորձը և լրացնե
                     headers.append(str(val).strip() if val else f"Column_{col}")
 
                 client = genai.Client(api_key=api_key)
+
                 request_contents = []
-
-                # Եթե կան նախկին գործարքների օրինակներ, նախ դրանք ենք տալիս AI-ին
-                if history_files:
-                    request_contents.append("=== ԲԱԺԻՆ 1. ՆԱԽԿԻՆ ՃԻՇՏ ԼՐԱՑՎԱԾ ԳՈՐԾԱՐՔՆԵՐԻ ՕՐԻՆԱԿՆԵՐ (ՈՒՍՈՒՑՄԱՆ ՀԱՄԱՐ) ===")
-                    for idx, hist_file in enumerate(history_files, start=1):
-                        hist_text = extract_text_from_excel(hist_file, max_rows=100)
-                        request_contents.append(f"--- Նախկին օրինակ #{idx} ({hist_file.name}) ---\n{hist_text}")
-
-                # Այնուհետև ավելացնում ենք նոր փաստաթղթերը
-                request_contents.append("=== ԲԱԺԻՆ 2. ՆՈՐ ՓԱՍՏԱԹՂԹԵՐ (ՈՐՈՆՔ ՊԵՏՔ Է ՄՇԱԿԵԼ ԵՎ ԼՐԱՑՆԵԼ) ===")
                 for idx, current_file in enumerate(doc_files, start=1):
-                    request_contents.append(f"--- Նոր փաստաթուղթ #{idx} ({current_file.name}) ---")
+                    request_contents.append(f"=== Փաստաթուղթ #{idx} (Ֆայլի անունը՝ {current_file.name}) ===")
                     if current_file.name.lower().endswith(".xlsx"):
-                        excel_text = extract_text_from_excel(current_file, max_rows=300)
+                        excel_text = extract_text_from_excel(current_file)
                         request_contents.append(excel_text)
                     else:
                         file_bytes = current_file.read()
@@ -102,16 +80,16 @@ if st.button("Ուսումնասիրել նախկին փորձը և լրացնե
                         )
 
                 prompt = f"""
-                Դու բարձրակարգ հաշվապահական և տվյալների վերլուծության մասնագետ ես։ 
-                
-                ՔՈ ԱՌԱՋԱԴՐԱՆՔԸ.
-                1. **Սովորիր նախկին փորձից.** Եթե վերևում տրված են «ԲԱԺԻՆ 1. ՆԱԽԿԻՆ ՃԻՇՏ ԼՐԱՑՎԱԾ ԳՈՐԾԱՐՔՆԵՐԻ ՕՐԻՆԱԿՆԵՐ», ուշադիր ուսումնասիրիր դրանք։ Տես, թե ինչպես են այնտեղ գրված կազմակերպությունների անունները, ինչ ստանդարտ ձևաչափեր, հապավումներ, կատեգորիաներ կամ հաշվապահական մոտեցումներ են կիրառվել։
-                2. **Իդենտիֆիկացրու անունները.** Նոր փաստաթղթերում (ԲԱԺԻՆ 2) հանդիպող անունները համեմատիր նախկին գործարքների բազայի հետ։ Եթե նույն կազմակերպությունը կամ անձը արդեն հանդիպել է նախկին օրինակներում (նույնիսկ եթե նոր փաստաթղթում գրված է այլ լեզվով, տրանսլիտով կամ փոքր տարբերությամբ), օգտագործիր նախկին ճիշտ լրացված անվանաձևն ու կապակցված տվյալները։
-                3. **Լրացրու նոր տվյալները.** Մշակիր ՄԻԱՅՆ «ԲԱԺԻՆ 2»-ի նոր փաստաթղթերը և կազմիր տվյալները՝ ըստ հետևյալ սյունակների անունների՝ {headers}։
-                4. **Կոմպակտ JSON.** Վերադարձրու կոմպակտ JSON՝ առանց ավելորդ բացատների և տողադարձերի։
+                Դու բարձրակարգ հաշվապահական և տվյալների վերլուծության մասնագետ ես։ Քո խնդիրն է ԱՌԱՎԵԼԱԳՈՒՅՆ ՃՇԳՐՏՈՒԹՅԱՄԲ վերլուծել վերևում տրված բոլոր {len(doc_files)} փաստաթղթերը միասին և լրացնել հետևյալ սյունակները՝ {headers}։
+
+                ԱՆՈՒՆՆԵՐԻ ԵՎ ՏՎՅԱԼՆԵՐԻ ԻԴԵՆՏԻՖԻԿԱՑՄԱՆ ԽԻՍՏ ԿԱՆՈՆՆԵՐ.
+                1. **Անունների նույնականացում (Fuzzy Matching).** Տարբեր ֆայլերում նույն անձի կամ կազմակերպության անունը կարող է գրված լինել փոքր-ինչ տարբեր (օրինակ՝ հայերեն, ռուսերեն կամ լատինատառ տրանսլիտով, «ՍՊԸ»-ով կամ առանց դրա, բառերի տեղափոխությամբ, կամ փոքր տառասխալներով)։ Ուշադիր համեմատիր տառ առ տառ, ստուգիր նաև ՀՎՀՀ-ները, հեռախոսահամարները, հասցեները կամ կոդերը՝ համոզվելու համար, որ ճիշտ ես կապում նույն սուբյեկտին։
+                2. **Առանց հորինելու.** Երբեք մի հորինիր տվյալներ։ Եթե անունը կամ թիվը դժվարընթեռնելի է, ուշադիր ուսումնասիրիր համատեքստը և մյուս փաստաթղթերը՝ ճիշտ տարբերակը հաստատելու համար։
+                3. **Տվյալների միավորում.** Բոլոր ֆայլերից հավաքիր տվյալները և միավորիր մեկ ամբողջական տողի մեջ յուրաքանչյուր եզակի գրառման համար։
+                4. **Կոմպակտ JSON.** Վերադարձրու կոմպակտ JSON՝ առանց ավելորդ բացատների և տողադարձերի, որպեսզի բոլոր տվյալները տեղավորվեն։
                 5. **Օգտատիրոջ հատուկ ցուցումներ.** {extra_instructions if extra_instructions else "Չկան"}
 
-                Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ՝ {headers}։ Եթե որևէ դաշտի տվյալ չկա, դիր դատարկ տող ""։
+                Վերադարձրու արդյունքը ՄԻԱՅՆ որպես JSON զանգված (list of objects), որտեղ յուրաքանչյուր օբյեկտի բանալիները (keys) ճշգրիտ համընկնում են տրված սյունակների անունների հետ՝ {headers}։ Եթե որևէ դաշտի տվյալ ընդհանրապես չկա, դիր դատարկ տող ""։
                 """
                 request_contents.append(prompt)
 
@@ -137,7 +115,7 @@ if st.button("Ուսումնասիրել նախկին փորձը և լրացնե
                                 max_output_tokens=65536
                             )
                         )
-                        st.info(f"Օգտագործվեց մոդել՝ {model_name}")
+                        st.info(f"Օգտագործվեց բարձր ճշգրտության մոդել՝ {model_name}")
                         break
                     except Exception as e:
                         last_error = e
@@ -163,7 +141,7 @@ if st.button("Ուսումնասիրել նախկին փորձը և լրացնե
                 wb.save(output)
                 output.seek(0)
 
-                st.success(f"Պատրաստ է։ Նախկին փորձի հիման վրա ավելացվեց {len(extracted_rows)} տող։")
+                st.success(f"Պատրաստ է։ Ավելացվեց {len(extracted_rows)} ճշգրտված տող։")
                 st.download_button(
                     label="📥 Ներբեռնել լրացված Excel-ը",
                     data=output,
